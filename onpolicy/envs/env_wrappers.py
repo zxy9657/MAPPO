@@ -43,6 +43,7 @@ class ShareVecEnv(ABC):
         self.observation_space = observation_space
         self.share_observation_space = share_observation_space
         self.action_space = action_space
+        self.agents = observation_space.keys()
 
     @abstractmethod
     def reset(self):
@@ -143,18 +144,15 @@ def worker(remote, parent_remote, env_fn_wrapper):
     while True:
         cmd, data = remote.recv()
         if cmd == 'step':
-            ob, reward, done, info = env.step(data)
-            if 'bool' in done.__class__.__name__:
-                if done:
-                    ob = env.reset()
-            else:
-                if np.all(done):
-                    ob = env.reset()
+            ob, reward, done, truncation, info = env.step(data)
 
-            remote.send((ob, reward, done, info))
+            if np.all(list(done.values())):
+                ob, info = env.reset()
+
+            remote.send((ob, reward, done, truncation, info))
         elif cmd == 'reset':
-            ob = env.reset()
-            remote.send((ob))
+            ob, info = env.reset()
+            remote.send((ob, info))
         elif cmd == 'render':
             if data == "rgb_array":
                 fr = env.render(mode=data)
@@ -262,15 +260,15 @@ class SubprocVecEnv(ShareVecEnv):
     def step_wait(self):
         results = [remote.recv() for remote in self.remotes]
         self.waiting = False
-        obs, rews, dones, infos = zip(*results)
-        return np.stack(obs), np.stack(rews), np.stack(dones), infos
+        obs, rews, dones, truncations, infos = zip(*results)
+        return obs, rews, dones, truncations, infos
 
     def reset(self):
         for remote in self.remotes:
             remote.send(('reset', None))
-        obs = [remote.recv() for remote in self.remotes]
-        return np.stack(obs)
-
+        results = [remote.recv() for remote in self.remotes]
+        obs, infos = zip(*results)
+        return obs, infos
 
     def reset_task(self):
         for remote in self.remotes:
